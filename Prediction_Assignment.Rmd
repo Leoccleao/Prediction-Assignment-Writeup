@@ -1,0 +1,114 @@
+---
+title: "Prediction Assignment"
+author: "Leo Leao"
+date: "8/20/2020"
+output: html_document
+---
+
+```{r setup, cache = TRUE, results=FALSE, warning=FALSE}
+library(dplyr)
+library(lubridate)
+library(caret)
+library(randomForest)
+library(ggplot2)
+library(e1071)
+
+      training <- read.table("pml-training.csv", sep = ",", 
+                  header = TRUE, strip.white = TRUE, na.strings = c("NA",""))
+      testing <- read.table("pml-testing.csv", sep = ",", 
+                  header = TRUE,strip.white = TRUE, na.strings = c("NA",""))
+
+```
+
+
+## Data Cleaning
+```{r NAclean, results=FALSE, cache = TRUE}
+# finding all empty columns from testing as they are not predictors
+ColTokeep <- which(colSums(is.na(testing)) == 0)
+
+# Excluding non-predictors
+cleantraining <- training[,ColTokeep]
+cleantesting <- testing[,ColTokeep]
+
+#converting timestamp to date and removing duplicated info on timestamp
+cleantesting$cvtd_timestamp <- as.Date(cleantesting$cvtd_timestamp,"%d/%m/%Y %H:%M")
+cleantraining$cvtd_timestamp <- as.Date(cleantraining$cvtd_timestamp,"%d/%m/%Y %H:%M")
+cleantraining <- cleantraining[,-c(1,3,4)]
+cleantesting <- cleantesting[,-c(1,3,4)]
+
+#converting classe output to factor
+cleantraining$classe <- as.factor(cleantraining$classe)
+
+```
+
+## Separate train data for validation
+```{r datapartition, results=FALSE, cache = TRUE}
+
+set.seed(1234)
+in_validation  <- createDataPartition(cleantraining$classe, p=0.7, list=FALSE)
+train <- cleantraining[in_validation, ]
+validation  <- cleantraining[-in_validation, ]
+```
+
+#Building Prediction Models
+
+## Random Forest
+```{r RF,  cache = TRUE}
+
+model <- randomForest(classe ~ ., data=train, proximity=TRUE)
+
+
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(model$err.rate), times=6),
+  Type=rep(c("OOB","A", "B", "C", "D","E"), each=nrow(model$err.rate)),
+  Error=c(model$err.rate[,"OOB"],
+          model$err.rate[,"A"], 
+          model$err.rate[,"B"], 
+          model$err.rate[,"C"],
+          model$err.rate[,"D"], 
+          model$err.rate[,"E"]))
+
+# Let`s take a look on out-of-bag errors for each level of classe
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +
+  geom_line(aes(color=Type))
+```
+
+
+Error has stabilized much before 500 trees, so increasing number of trees is not a leading idea for tuning.
+
+RandomForest was used with standard  number of variables tested at each node: (sqrt(p) where p is number of
+variables). Let`s try to tune this parameter.
+
+```{r RFTUNE, cache = TRUE}
+
+#Let`s check OOB errors for different mtry values
+oob.values <- NULL
+for(i in c(5,10,15,17,22)) {
+  temp.model <- randomForest(classe ~ ., data=train, mtry=i)
+  oob.values <- c(oob.values,temp.model$err.rate[nrow(temp.model$err.rate),1])
+}
+
+oob.values
+```
+
+Create a tuned RFmodel using the best value for mtry (22 = 0.001747106)
+
+```{r RFTUNED, results=FALSE, cache = TRUE}
+model <- randomForest(classe ~ ., data=train, 
+                      proximity=TRUE, 
+                      mtry= 22)
+```
+
+Checking out of sample error with validation data
+
+```{r validation, cache = TRUE}
+pred <- predict(model,validation)
+
+ConfMatrixRF <- confusionMatrix(pred, validation$classe)
+ConfMatrixRF
+```
+
+```{r testing, cache = TRUE}
+pred <- predict(model,cleantesting)
+pred
+````
